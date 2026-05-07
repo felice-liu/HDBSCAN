@@ -16,7 +16,7 @@ module hdbscan
         HIERARCHY_dtype,
         labelling_at_cut,
         tree_to_labels
-        import sparse:
+    import sparse:
         csgraph,
         issparse
     
@@ -104,7 +104,7 @@ module hdbscan
         estimator_state::base_estimator,
         mixin_state::cluster_mixin
     end
-
+#=
     function HDBSCAN()
         hdbscan_state(5, nothing, 0.0, nothing, "euclidean", nothing, 1.0,
         "auto", 40, nothing, "eom", false, nothing, "warn", nothing, nothing)
@@ -129,6 +129,5 @@ module hdbscan
 
     function __sklearn_tags__(self)
     end
-        
-    end
+    =#
 end

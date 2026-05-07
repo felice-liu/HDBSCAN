@@ -1,75 +1,54 @@
-struct CONDENSED_t
-    parent::Int
-    child::Int
-    value::Float64
-    cluster_size::Int
-end
+const INFTY = Inf
+const NOISE = -1
 
-struct HIERARCHY_t
-    left_node::Int
-    right_node::Int
-    value::Float64
-    cluster_size::Int
-end
-#=
-struct HIERARCHY_dtype
+mutable struct HIERARCHY_t
     left_node::Int
     right_node::Int
     value::Float64
     cluster_size::Int
 end
 
-struct CONDENSED_dtype
+mutable struct CONDENSED_t
     parent::Int
     child::Int
     value::Float64
     cluster_size::Int
 end
-=#
-const INFTY::Float64 = Inf
-const NOISE::Int = -1
 
-function tree_to_labels(
-    single_linkage_tree::Vector{HIERARCHY_t},
+
+function tree_to_labels(single_linkage_tree,
     min_cluster_size::Int=10,
-    cluster_selection_method::String="eom",
+    cluster_selection_method="eom",
     allow_single_cluster::Bool=false,
     cluster_selection_epsilon::Float64=0.0,
-    max_cluster_size=nothing) ::Tuple{Vector{Int}, Vector{Float64}}
+    max_cluster_size=nothing,)
 
-    condensed_tree::Vector{CONDENSED_t}
-    labels::Array{Int}
-    probabilities::Array{Float64}
-
-    labels, probabilities = _get_clusters(
-        condensed_tree,
+    condensed_tree = _condense_tree(single_linkage_tree, min_cluster_size)
+    labels, probabilities = _get_clusters(condensed_tree,
         _compute_stability(condensed_tree),
         cluster_selection_method,
         allow_single_cluster,
         cluster_selection_epsilon,
-        max_cluster_size,
-    )
+        max_cluster_size,)
+
     return (labels, probabilities)
 end
 
-function bfs_from_hierarchy(
-    hierarchy::Vector{HIERARCHY_t},
-    bfs_root::Int)
+function bfs_from_hierarchy(hierarchy, bfs_root)
 
-    n_samples = length(hierarchy) + 1
-    process_queue = [bfs_root]
-    result = Int[]
+    process_queue = [bfs_root]#18
+    result = []
+    n_samples = length(hierarchy) + 1 #10
 
     while !isempty(process_queue)
         append!(result, process_queue)
-
-        process_queue = [x - n_samples for x in process_queue if x > n_samples]
+        process_queue = [x - n_samples for x in process_queue if x >= n_samples]
 
         if !isempty(process_queue)
-            next_queue = Int[]
+            next_queue = []
             for node in process_queue
-                h = hierarchy[node]
-                append!(next_queue, [h.left_node, h.right_node])
+                push!(next_queue, hierarchy[node + 1].left_node)
+                push!(next_queue, hierarchy[node + 1].right_node)
             end
             process_queue = next_queue
         end
@@ -77,24 +56,45 @@ function bfs_from_hierarchy(
     return result
 end
 
-function _condense_tree(
-    hierarchy::Vector{HIERARCHY_t},
-    min_cluster_size::Int=10)
+#= test_tree, bfs_root = 18 -> 19-element Vector{Any}:
+ 18
+ 17
+ 16
+ 15
+ 14
+ 12
+ 13
+ 10
+ 11
+  8
+  9
+  4
+  5
+  6
+  7
+  0
+  1
+  2
+  3
+ Validato con Python =#
 
-    root::Int = 2 * length(hierarchy)
-    n_samples::Int = length(hierarchy) + 1
-    next_label::Int = n_samples + 1
 
-    result_list,
+function _condense_tree(hierarchy, min_cluster_size::Int=10)
+
+    root = 2 * length(hierarchy)
+    n_samples = length(hierarchy) + 1
+    next_label = n_samples + 1 #11
+
     node_list = bfs_from_hierarchy(hierarchy, root)
 
-    relabel = zeros(Int, root + 1) #Inizializza a 0, non a empty rispetto a np.empty
-    relabel[root] = n_samples
+    relabel = zeros(Int, root + 1)
+    relabel[root + 1] = n_samples
 
+    result_list = []
     ignore = falses(length(node_list))
 
     for node in node_list
-        if ignore[node+1] || node < n_samples  
+        if ignore[node + 1] || node < n_samples
             continue
         end
 
@@ -103,9 +103,9 @@ function _condense_tree(
         right = children.right_node
         distance = children.value
 
-        if  distance > 0
+        if distance > 0.0
             lambda_value = 1.0 / distance
-        else 
+        else
             lambda_value = INFTY
         end
 
@@ -114,55 +114,59 @@ function _condense_tree(
         else
             left_count = 1
         end
-
+        
         if right >= n_samples
-            right_count = hierarchy[right - n_samples + 1].cluster_size 
-        else    
+            right_count = hierarchy[right - n_samples + 1].cluster_size
+        else
             right_count = 1
         end
-        
+
         if left_count >= min_cluster_size && right_count >= min_cluster_size
             relabel[left + 1] = next_label
             next_label += 1
-            append!(result_list, CONDENSED_t(relabel[node+1], relabel[left + 1], lambda_value, left_count))
-            
+            push!(result_list, CONDENSED_t(relabel[node + 1], relabel[left + 1],
+                lambda_value, left_count))
 
             relabel[right + 1] = next_label
             next_label += 1
-            append!(result_list, CONDENSED_t(relabel[node+1], relabel[right + 1] , lambda_value, right_count))
-            
+            push!(result_list, CONDENSED_t(relabel[node + 1],
+                relabel[right + 1], lambda_value, right_count))
 
         elseif left_count < min_cluster_size && right_count < min_cluster_size
             for sub_node in bfs_from_hierarchy(hierarchy, left)
                 if sub_node < n_samples
-                    append!(result_list, CONDENSED_t(relabel[node + 1], sub_node, lambda_value, 1))
+                    push!(result_list, CONDENSED_t(relabel[node + 1],
+                        sub_node, lambda_value, 1))
                 end
-                ignore[sub_node] = true
+                ignore[sub_node + 1] = true
             end
 
             for sub_node in bfs_from_hierarchy(hierarchy, right)
                 if sub_node < n_samples
-                    append!(result_list, CONDENSED_t(relabel[node + 1], sub_node, lambda_value, 1))
+                    push!(result_list, CONDENSED_t(relabel[node + 1],
+                        sub_node, lambda_value, 1))
                 end
-                ignore[sub_node] = true
+                ignore[sub_node + 1] = true
             end
 
         elseif left_count < min_cluster_size
             relabel[right + 1] = relabel[node + 1]
             for sub_node in bfs_from_hierarchy(hierarchy, left)
                 if sub_node < n_samples
-                    append!(result_list, CONDENSED_t(relabel[node + 1], sub_node, lambda_value, 1))
+                    push!(result_list, CONDENSED_t(relabel[node + 1],
+                    sub_node, lambda_value, 1))
                 end
-                ignore[sub_node] = true
+                ignore[sub_node + 1] = true
             end
 
         else
             relabel[left + 1] = relabel[node + 1]
             for sub_node in bfs_from_hierarchy(hierarchy, right)
                 if sub_node < n_samples
-                    append!(result_list, CONDENSED_t(relabel[node], sub_node, lambda_value, 1))
+                    push!(result_list, CONDENSED_t(relabel[node + 1],
+                    sub_node,lambda_value, 1))
                 end
-                ignore[sub_node] = true
+                ignore[sub_node + 1] = true
             end
         end
     end
@@ -170,73 +174,86 @@ function _condense_tree(
     return result_list
 end
 
-function _compute_stability(condensed_tree::Vector{CONDENSED_t})
+#=
+_condense_tree(hierarchy_test_tree_python, 10)
+10-element Vector{Any}:
+ CONDENSED_t(10, 8, 1.0, 1)
+ CONDENSED_t(10, 9, 1.0, 1)
+ CONDENSED_t(10, 0, 1.0, 1)
+ CONDENSED_t(10, 1, 1.0, 1)
+ CONDENSED_t(10, 2, 1.0, 1)
+ CONDENSED_t(10, 3, 1.0, 1)
+ CONDENSED_t(10, 4, 1.0, 1)
+ CONDENSED_t(10, 5, 1.0, 1)
+ CONDENSED_t(10, 6, 1.0, 1)
+ CONDENSED_t(10, 7, 1.0, 1)
+ Validato con Python
+ =#
 
-    parents = [n.parent for n in condensed_tree]
+function _compute_stability(condensed_tree)
+    parents = [c.parent for c in condensed_tree]
 
-    largest_child = maximum(n.child for n in condensed_tree)
-    smallest_cluster = minimum(parents)
+    largest_child = maximum([c.child for c in condensed_tree]) #9
+    smallest_cluster = minimum(parents) #10
     num_clusters = maximum(parents) - smallest_cluster + 1
-
-    largest_child = max(largest_child, smallest_cluster)
 
     births = fill(NaN, largest_child + 1)
 
-    for idx in 1:length(condensed_tree)
+    for idx in eachindex(condensed_tree)
         condensed_node = condensed_tree[idx]
-        births[condensed_node.child] = condensed_node.value
+        births[condensed_node.child + 1] = condensed_node.value
     end
 
-    births[smallest_cluster] = 0.0
+    births[smallest_cluster + 1] = 0.0
 
     result = zeros(Float64, num_clusters)
 
-    for idx in 1:length(condensed_tree)
+    for idx in eachindex(condensed_tree)
         condensed_node = condensed_tree[idx]
         parent = condensed_node.parent
         lambda_val = condensed_node.value
         cluster_size = condensed_node.cluster_size
         
-        result_index = parent - smallest_cluster + 1
+        result_index = parent - smallest_cluster
         result[result_index] += (lambda_val - births[parent]) * cluster_size
     end
-    
+
     stability_dict = Dict{Int, Float64}()
 
-    for idx in 1:num_clusters
-        stability_dict[idx + smallest_cluster - 1] = result[idx]
+    for idx in 1:(num_clusters + 1)
+        stability_dict[idx + smallest_cluster] = result[idx]
     end
 
     return stability_dict
 end
 
-function bfs_from_cluster_tree(
-    condensed_tree::Vector{CONDENSED_t},
-    bfs_root::Int)
-    result,
-    process_queue::Vector{Int} = bfs_root::Array{Int}
-    children = [n.child for n in condensed_tree]
-    parents = [n.parent for n in condensed_tree]
+function bfs_from_cluster_tree(condensed_tree, bfs_root)
+    result = []
+    process_queue = [bfs_root]
+
+    children = [c.child for c in condensed_tree]
+    parents = [c.parent for c in condensed_tree]
 
     while !isempty(process_queue)
-        push!(result, process_queue)
-        process_queue = children[in.(parents, process_queue)]
+        append!(result, process_queue)
+        process_queue = [children[i]
+            for i in eachindex(children)
+                if parents[i] in process_queue]
     end
-    
+
     return result
 end
 
-function max_lambdas(condensed_tree::Vector{CONDENSED_t})
-    parent,
-    parents = [n.parent for n in condensed_tree]
-    largest_parent = maximum(parents)
+function max_lambdas(condensed_tree)
+    largest_parent = maximum([c.parent for c in condensed_tree])
     deaths = zeros(Float64, largest_parent + 1)
+
     current_parent = condensed_tree[1].parent
     max_lambda = condensed_tree[1].value
 
-    for idx in 1:length(condensed_tree)
-        parent = condensed_tree[idx].parent
-        lambda_val = condensed_tree[idx].value
+    for i in 2:length(condensed_tree)
+        parent = condensed_tree[i].parent
+        lambda_val = condensed_tree[i].value
 
         if parent == current_parent
             max_lambda = max(max_lambda, lambda_val)
@@ -250,19 +267,52 @@ function max_lambdas(condensed_tree::Vector{CONDENSED_t})
     return deaths
 end
 
-function labelling_at_cut(
-    linkage::Vector{HIERARCHY_t},
-    cut::Float64,
-    min_cluster_size::Int)
+mutable struct TreeUnionFind
+    data::Array{Int,2}
+    is_component::Vector{Int}
+end
 
-    root = 2 * length(linkage)
+function init_TreeUnionFind(size)
+    data = zeros(Int, size, 2)
+    for i in 1:size
+        data[i,1] = i
+    end
+    is_component = trues(size)
+    tuf = TreeUnionFind(data, is_component)
+    return tuf
+end
+
+function union(tuf, x, y)
+    x_root = find(tuf, x)
+    y_root = find(tuf, y)
+
+    if tuf.data[x_root,2] < tuf.data[y_root,2]
+        tuf.data[x_root,1] = y_root
+    elseif tuf.data[x_root,2] > tuf.data[y_root,2]
+        tuf.data[y_root,1] = x_root
+    else
+        tuf.data[y_root,1] = x_root
+        tuf.data[x_root,2] += 1
+    end
+end
+
+function find(tuf, x)
+    if tuf.data[x,1] != x
+        tuf.data[x,1] = find(tuf, tuf.data[x,1])
+        tuf.is_component[x] = false
+    end
+    return tuf.data[x,1]
+end
+
+
+function labelling_at_cut(linkage, cut, min_cluster_size)
+    root = 2 * length(linkage) + 1
     n_samples = div(root, 2) + 1
 
-    union_find = TreeUnionFind(root + 1)
     result = zeros(Int, n_samples)
+    union_find = init_TreeUnionFind(root + 1)
 
     cluster = n_samples
-
     for node in linkage
         if node.value < cut
             union(union_find, node.left_node, cluster)
@@ -271,18 +321,19 @@ function labelling_at_cut(
         cluster += 1
     end
 
-    cluster_size = zeros(Int, cluster)
+    cluster_size = zeros(Int, cluster + 1)
 
-    for n in n_samples
+    for n in 1:n_samples
         cluster = find(union_find, n)
         cluster_size[cluster] += 1
         result[n] = cluster
     end
 
-    cluster_label_map = Dict{Int, Int}(-1 => NOISE)
+    cluster_label_map = Dict(-1 => NOISE)
+    cluster_label = 0
+
     unique_labels = unique(result)
 
-    cluster_label = 0
     for cluster in unique_labels
         if cluster_size[cluster] < min_cluster_size
             cluster_label_map[cluster] = NOISE
@@ -292,38 +343,37 @@ function labelling_at_cut(
         end
     end
 
-    for n in n_samples
+    for n in 1:n_samples
         result[n] = cluster_label_map[result[n]]
     end
 
     return result
 end
 
-function _do_labelling(
-    condensed_tree::Vector{CONDENSED_t},
-    clusters::Set{Int},
-    cluster_label_map::Dict{Int,Int},
-    allow_single_cluster::Int,
-    cluster_selection_epsilon::Float64
-)
-    child_array = [n.child for n in condensed_tree]
-    parent_array = [n.parent for n in condensed_tree]
-    lambda_array = [n.value for n in condensed_tree]
+function _do_labelling(condensed_tree,
+    clusters,
+    cluster_label_map,
+    allow_single_cluster,
+    cluster_selection_epsilon)
+
+    child_array = [c.child for c in condensed_tree]
+    parent_array = [c.parent for c in condensed_tree]
+    lambda_array = [c.value for c in condensed_tree]
 
     root_cluster = minimum(parent_array)
-    result = Vector{Int}(undef, root_cluster)
+    result = fill(0, root_cluster)
 
-    union_find = TreeUnionFind(maximum(parent_array) + 1)
+    union_find = init_TreeUnionFind(maximum(parent_array) + 1)
 
-    for n in condensed_tree
-        child = child_array[n]
-        parent = parent_array[n]
+    for i in eachindex(condensed_tree)
+        child = child_array[i]
+        parent = parent_array[i]
         if !(child in clusters)
             union(union_find, parent, child)
         end
     end
 
-    for n in root_cluster
+    for n in 1:root_cluster
         cluster = find(union_find, n)
         label = NOISE
 
@@ -331,39 +381,41 @@ function _do_labelling(
             label = cluster_label_map[cluster]
 
         elseif length(clusters) == 1 && allow_single_cluster
-            parent_lambda = lambda_array[findall(==(n), child_array)]
-                if  cluster_selection_epsilon != 0.0
-                    threshold = 1 / cluster_selection_epsilon
-                else
-                maximum(lambda_array[parent_array .== cluster])
-                end
-            if !isempty(parent_lambda) && parent_lambda[1] ? threshold
+            parent_lambda = maximum([lambda_array[i]
+                for i in eachindex(child_array)
+                if child_array[i] == n])
+
+            if cluster_selection_epsilon != 0.0
+                threshold = 1 / cluster_selection_epsilon
+            else
+                threshold = maximum([lambda_array[i]
+                    for i in eachindex(parent_array)
+                    if parent_array[i] == cluster])
+            end
+
+            if parent_lambda >= threshold
                 label = cluster_label_map[cluster]
             end
         end
 
-        result[n+1] = label
+        result[n] = label
     end
 
     return result
 end
 
-function get_probabilities(
-    condensed_tree::Vector{CONDENSED_t},
-    cluster_map::Dict{Int,Int},
-    labels::Vector{Int}
-)
-    child_array = [n.child for n in condensed_tree]
-    parent_array = [n.parent for n in condensed_tree]
-    lambda_array = [n.value for n in condensed_tree]
+function get_probabilities(condensed_tree, cluster_map, labels)
+
+    child_array = [c.child for c in condensed_tree]
+    parent_array = [c.parent for c in condensed_tree]
+    lambda_array = [c.value for c in condensed_tree]
 
     result = zeros(Float64, length(labels))
     deaths = max_lambdas(condensed_tree)
-
     root_cluster = minimum(parent_array)
 
-    for n in condensed_tree
-        point = child_array[n]
+    for i in eachindex(condensed_tree)
+        point = child_array[i]
         if point >= root_cluster
             continue
         end
@@ -376,44 +428,47 @@ function get_probabilities(
         cluster = cluster_map[cluster_num]
         max_lambda = deaths[cluster]
 
-        if max_lambda == 0.0 || isinf(lambda_array[n])
-            result[point+1] = 1.0
+        if max_lambda == 0.0 || isinf(lambda_array[i])
+            result[point] = 1.0
         else
-            lambda_val = min(lambda_array[n], max_lambda)
-            result[point+1] = lambda_val / max_lambda
+            lambda_val = min(lambda_array[i], max_lambda)
+            result[point] = lambda_val / max_lambda
         end
     end
 
     return result
 end
 
-function recurse_leaf_dfs(cluster_tree::Vector{CONDENSED_t}, current_node::Int)
-    children = [n.child for n in cluster_tree if n.parent == current_node]
+function recurse_leaf_dfs(cluster_tree, current_node)
+    children = [c.child for c in cluster_tree if c.parent == current_node]
 
     if isempty(children)
         return [current_node]
     else
-        return vcat([recurse_leaf_dfs(cluster_tree, child) for child in children])
+        result = []
+        for child in children
+            append!(result, recurse_leaf_dfs(cluster_tree, child))
+        end
+        return result
     end
 end
 
-function get_cluster_tree_leaves(cluster_tree::Vector{CONDENSED_t})
-    if isempty(cluster_tree) 
+function get_cluster_tree_leaves(cluster_tree)
+
+    if isempty(cluster_tree)
         return []
     end
-    root = minimum(n.parent for n in cluster_tree)
+    root = minimum([c.parent for c in cluster_tree])
     return recurse_leaf_dfs(cluster_tree, root)
 end
 
-function traverse_upwards(
-    cluster_tree::Vector{CONDENSED_t},
-    cluster_selection_epsilon::Float64,
-    leaf::Int,
-    allow_single_cluster::Bool
-)
-    root = minimum(n.parent for n in cluster_tree)
+function traverse_upwards(cluster_tree,
+    cluster_selection_epsilon,
+    leaf,
+    allow_single_cluster)
 
-    parent = first(n.parent for n in cluster_tree if n.child == leaf)
+    root = minimum([c.parent for c in cluster_tree])
+    parent = [c.parent for c in cluster_tree if c.child == leaf]
 
     if parent == root
         if allow_single_cluster
@@ -423,42 +478,43 @@ function traverse_upwards(
         end
     end
 
-    parent_val = first(n.value for n in cluster_tree if n.child == parent)
-    parent_eps = 1 / parent_val
+    parent_eps = 1 / [c.value for c in cluster_tree if c.child == parent]
 
     if parent_eps > cluster_selection_epsilon
         return parent
     else
-        return traverse_upwards(
-            cluster_tree,
-            cluster_selection_epsilon,
-            parent,
-            allow_single_cluster)
+        return traverse_upwards(cluster_tree, cluster_selection_epsilon,
+        parent, allow_single_cluster)
     end
 end
 
-function epsilon_search(
-    leaves::Set{Int},
-    cluster_tree::Vector{CONDENSED_t},
-    cluster_selection_epsilon::Float64,
-    allow_single_cluster::Bool
-)
+function epsilon_search(leaves,
+    cluster_tree,
+    cluster_selection_epsilon,
+    allow_single_cluster)
+
     selected_clusters = []
     processed = []
 
-    for leaf in leaves
-        leaf_nodes = children == leaf
+    children = [c.child for c in cluster_tree]
+    distances = [c.value for c in cluster_tree]
 
-        eps = 1 / vals[1]
+    for leaf in leaves
+        first = findfirst(==(leaf), children)
+        eps = 1 / distances[first]
 
         if eps < cluster_selection_epsilon
             if !(leaf in processed)
-                ec = traverse_upwards(cluster_tree, cluster_selection_epsilon,
-                    leaf, allow_single_cluster)
-                push!(selected_clusters, ec)
+                epsilon_child = traverse_upwards(
+                    cluster_tree,
+                    cluster_selection_epsilon,
+                    leaf,
+                    allow_single_cluster
+                )
+                push!(selected_clusters, epsilon_child)
 
-                for sub_node in bfs_from_cluster_tree(cluster_tree, ec)
-                    if sub_node != ec
+                for sub_node in bfs_from_cluster_tree(cluster_tree, epsilon_child)
+                    if sub_node != epsilon_child
                         push!(processed, sub_node)
                     end
                 end
@@ -471,74 +527,72 @@ function epsilon_search(
     return Set(selected_clusters)
 end
 
-function _get_clusters(
-    condensed_tree::Vector{CONDENSED_t},
-    stability::Dict{Int,Float64};
-    cluster_selection_method::String="eom",
-    allow_single_cluster::Bool=false,
-    cluster_selection_epsilon::Float64=0.0,
-    max_cluster_size=nothing
-)
-    nodes_list = sort(collect(keys(stability)), rev=true)
+function _get_clusters(condensed_tree,
+    stability,
+    cluster_selection_method="eom",
+    allow_single_cluster=false,
+    cluster_selection_epsilon=0.0,
+    max_cluster_size=nothing)
 
-    if !allow_single_cluster
-        nodes_list = nodes_list[1:end-1]
+    if allow_single_cluster
+        node_list = sort(collect(keys(stability)), rev=true)
+    else
+        node_list = sort(collect(keys(stability)), rev=true)[1:end-1]
     end
 
-    cluster_tree = [n for n in condensed_tree if n.cluster_size > 1]
+    cluster_tree = [c for c in condensed_tree if c.cluster_size > 1]
+    is_cluster = Dict(c => true for c in node_list)
 
-    is_cluster = Dict(n => true for n in nodes_list)
-
-    n_samples = maximum(n.child for n in condensed_tree if n.cluster_size == 1) + 1
+    n_samples = maximum([c.child
+        for c in condensed_tree if c.cluster_size == 1]) + 1
 
     if max_cluster_size === nothing
         max_cluster_size = n_samples + 1
     end
 
-    #cluster_sizes = Dict(n.child => n.cluster_size for n in cluster_tree)
+    cluster_sizes = Dict(c.child => c.cluster_size for c in cluster_tree)
 
     if allow_single_cluster
-        root = nodes_list[end]
-        cluster_sizes[root] = sum(n.cluster_size for n in cluster_tree if n.parent == root)
+        root = node_list[end]
+        cluster_sizes[root] = sum([c.cluster_size
+        for c in cluster_tree if c.parent == root])
     end
 
     if cluster_selection_method == "eom"
-        for node in nodes_list
-            children = [n.child for n in cluster_tree if n.parent == node]
-            subtree_stability = sum(stability[ch] for ch in children)
+        for node in node_list
+            children = [c.child for c in cluster_tree if c.parent == node]
+            subtree_stability = sum(stability[c] for c in children)
 
-            if subtree_stability > stability[node] || cluster_sizes[node] > max_cluster_size
+            if subtree_stability > stability[node] ||
+                cluster_sizes[node] > max_cluster_size
+
                 is_cluster[node] = false
                 stability[node] = subtree_stability
             else
-                for sub in bfs_from_cluster_tree(cluster_tree, node)
-                    if sub != node
-                        is_cluster[sub] = false
+                for sub_node in bfs_from_cluster_tree(cluster_tree, node)
+                    if sub_node != node
+                        is_cluster[sub_node] = false
                     end
                 end
             end
         end
 
         if cluster_selection_epsilon != 0.0 && !isempty(cluster_tree)
-            eom_clusters = [c for (c,v) in is_cluster if v]
+            eom_clusters = [c for c in keys(is_cluster) if is_cluster[c]]
 
-            selected_clusters = []
-                if length(eom_clusters) == 1 &&
-                   eom_clusters[1] == minimum(n.parent for n in cluster_tree)
-                    if allow_single_cluster 
-                        selected_clusters = eom_clusters
-                else
-                    epsilon_search(Set(eom_clusters), cluster_tree,
-                                   cluster_selection_epsilon,
-                                   allow_single_cluster)
-                end
+            if length(eom_clusters) == 1 &&
+                eom_clusters[1] == minimum([c.parent for c in cluster_tree])
 
-            for c in is_cluster
-                if c in selected_clusters
-                is_cluster[c] = true
-                else
-                is_cluster[c] = false
-                end
+                selected_clusters = allow_single_cluster ? eom_clusters : Int[]
+            else
+                selected_clusters = epsilon_search(Set(eom_clusters),
+                    cluster_tree,
+                    cluster_selection_epsilon,
+                    allow_single_cluster)
+            end
+
+            for c in keys(is_cluster)
+                is_cluster[c] = c in selected_clusters
             end
         end
 
@@ -546,34 +600,48 @@ function _get_clusters(
         leaves = Set(get_cluster_tree_leaves(cluster_tree))
 
         if isempty(leaves)
-            for n in is_cluster
-                is_cluster[n] = false
+            for c in keys(is_cluster)
+                is_cluster[c] = false
             end
-            is_cluster[minimum(n.parent for n in condensed_tree)] = true
+            is_cluster[minimum([c.parent for c in condensed_tree])] = true
         end
 
-        if cluster_selection_epsilon != 0.0
-            selected_clusters = epsilon_search(leaves, cluster_tree,
-                           cluster_selection_epsilon,
-                           allow_single_cluster)
+        if cluster_selection_epsilon != 0.0 
+            selected_clusters = epsilon_search(leaves,
+                cluster_tree, cluster_selection_epsilon, allow_single_cluster)
         else
             selected_clusters = leaves
+        end
 
-        for c in is_cluster
+        for c in keys(is_cluster)
             is_cluster[c] = c in selected_clusters
-            end
         end
     end
 
-    clusters = Set(c for (c,v) in is_cluster if v)
-
-    cluster_map = Dict(c => i-1 for (i,c) in enumerate(sort(collect(clusters))))
+    clusters = Set([c for c in keys(is_cluster) if is_cluster[c]])
+    cluster_map = Dict(c => i-1
+        for (i,c) in enumerate(sort(collect(clusters))))
     reverse_cluster_map = Dict(v => k for (k,v) in cluster_map)
 
-    labels = do_labelling(condensed_tree, clusters, cluster_map,
-                          allow_single_cluster, cluster_selection_epsilon)
+    labels = _do_labelling(condensed_tree,
+        clusters,
+        cluster_map,
+        allow_single_cluster,
+        cluster_selection_epsilon)
 
     probs = get_probabilities(condensed_tree, reverse_cluster_map, labels)
 
-    return labels, probs
+    return (labels, probs)
 end
+
+# Testing
+
+hierarchy_test_tree_python = [HIERARCHY_t(0, 1, 0.1, 2),
+        HIERARCHY_t(2, 3, 0.2, 2),
+        HIERARCHY_t(4, 5, 0.3, 2),
+        HIERARCHY_t(6, 7, 0.4, 2),
+        HIERARCHY_t(8, 9, 0.5, 2),
+        HIERARCHY_t(10, 11, 0.6, 4),
+        HIERARCHY_t(12, 13, 0.7, 4),
+        HIERARCHY_t(15, 14, 0.8, 6),
+        HIERARCHY_t(17, 16, 1.0, 10)]
